@@ -3,11 +3,7 @@
 # Co-Author: Charles Lundblad
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # This program will index a given directory for music files and extract the ID3 tags 
-# into an index that you can then sort and parse though.
-# The index can then be modified and eventually written to a new path.
-# The goal is to create a common structure for your music library
-# The structure is EX: Artist/Album/1 - Track.mp3
-# The files will be moved from the old source to the new directory.
+# then it will create an SQL script to insert into your database
 
 use strict;
 use warnings;
@@ -33,8 +29,6 @@ my $exifTool = new Image::ExifTool;
 my @keep = qw(Year Track Album FileType AudioBitrate Artist Title AvgBitrate Albumartist FileSize);
 my $oldSetting = $exifTool->Options(Duplicates => 0);
 
-&index();
-
 # runs the main menu
 while(1) {
 	&menu();
@@ -43,24 +37,22 @@ while(1) {
 #Menu for the user
 sub menu {
 	print "What would you like to do?\n";
-	print "1) Print all music files matching x\n";
+	print "1) Index <directory>\n";
 	print "2) Remove (from index) all music files matching x\n";
-	print "3) Move & Rename indexed files\n";
-	print "4) Enter a new source directory to index (or index again)\n";
-	print "5) Quit!\n";
+	print "3) Create SQL script\n";
+	print "4) Quit!\n";
 	print "Choice: ";
 
 	my $choice = <STDIN>; chomp($choice);
-	while($choice !~ m/[1-6]/){
+	while($choice !~ m/[1-4]/)
+	{
 		print "Choice: ";
 		$choice = <STDIN>; chomp $choice;
 	}
-	
-	&preprint if $choice eq "1";
+	&index() if $choice eq "1";
 	&preremove() if $choice eq "2";
 	&prebuild() if $choice eq "3";
-	&index() if $choice eq "4";
-	exit if $choice eq "5";
+	exit if $choice eq "4";
 }
 
 #Scans a directory for music files supported by ExifTool adding them to @music_list.
@@ -77,33 +69,30 @@ sub index {
 		}
 		
 	}, $source_directory;
-	&id3();
-}
-
-#Extracts ID3 tags from files in @music_list, adding ID3 tags to %tags.
-sub id3 {
+	
+	#Extracts ID3 tags from files in @music_list, adding ID3 tags to %tags.
 	my $music_list_length = scalar(@music_list);
 	%tags = ();
 	print "Retrieving ID3 tags.... this may take awhile!\n";
+	#print "This tool indexes all your music files.  It knows the Artist, Album, Year, Track, Track #, Bitrate, and File Type.\n";
+	#print "When searching the index simple enter a word or FLAC to get flac.  If you want to search a range of bit rates use the format \"> 160\" or \"< 128\"\n";
+	#print "Once you decide to write it will create Artist/Album/0Title.mp3 tree for each entry, moving the old files from the source.\n";
 	my $i = 1;
 	foreach (@music_list) {
 		print "25% done\n" if $music_list_length / $i == 4;
 		print "50% done\n" if $music_list_length / $i == 2;
 		print "75% done\n" if $music_list_length / $i == (4/3);
-		
-		#prints out exactly what is going on, --verbose
-		if($verbose){
-			print "(" . $i . " of " . $music_list_length . ") Retrieving ID3 tags from: $_\n";
-		}
 		#SO SLOW! Is there a better way to do this?  Batch job..?
+		
+		if($verbose){
+			print "Retrieving ID3 tags from: $_\n";
+		}
+		
 		$tags{"$_"} = $exifTool->ImageInfo("$_", @keep) or warn "*Error getting ID3 tags from $_\n";
 		$i++;
 	}
-	&make_artists();
-}
-
-#Builds %artist -> %albums -> %songs -> attributes hash from %tags
-sub make_artists {
+	
+	#Builds %artist -> %albums -> %songs -> attributes hash from %tags
 	print "Building index...\n";
 	%artists = ();
 	my $no_id3_tags = 0;
@@ -159,14 +148,11 @@ sub make_artists {
 		}
 		else {
 			$no_id3_tags++;
-			
-			#prints out exactly what is going on, --verbose
 			if($verbose){
 				print color 'Bold Red';
 				print "[Skipping] Error with tags in file: $filepath\n";
 				print color 'reset';
 			}
-			
 			next;
 		}
 	}
@@ -177,7 +163,6 @@ sub make_artists {
 	print color 'reset';
 	print "Files dropped because a better quality version was found: " . $files_with_lower_bitrate . "\n";
 	print "Duplicate files not counted: " . $duplicate_files . "\n";
-	
 }
 
 sub anon_hash {
@@ -251,209 +236,88 @@ sub doors {
 
 #Build will create the file structure and then move the files
 sub build {
-	my $base = &sanitize(shift, 1);
-	my $moveFile;
-	my $choice;
-	$choice = 0;
-	$moveFile = 0;
-	
-	print "Moving files to $base\n";
-	print "Would you like to copy or move your source files?\n";
-	print "1) Copy\n";
-	print "2) Move\n";
-	print "Choice: ";
-	
-	$choice = <STDIN>; chomp($choice);
-	while($choice !~ m/[1-2]/){
-		print "Choice: ";
-		$choice = <STDIN>; chomp $choice;
-	}
-	if($choice == 1){
-		$moveFile = 0;
-	}
-	if($choice == 2){
-		$moveFile = 1;
-	}
+	my $SQL_file = &spaces(shift);
 
-	$choice = 0;
-	print "\n\nMoving files to $base\n";
-	print "Please make one last decision and I won't bother you anymore, please pick one.\n";
-	print "1) Overwrite existing files, if any, assume new file is better\n";
-	print "2) Overwrite existing file ONLY if source file is a higher bitrate\n";
-	print "3) Do not overwrite existing files, only add\n";
-	print "Choice: ";
+	print "\n\nGenerating SQL Script: $SQL_file\n";
+	open (MYFILE, ">>$SQL_file");
+	print MYFILE "-- This script will create the database music_database\n";
+	print MYFILE "-- and will also populate the table with your music list\n";
+	print MYFILE "CREATE DATABASE `music_database` ;\n";
+	print MYFILE "USE music_database;\n";
 	
-	$choice = <STDIN>; chomp($choice);
-	while($choice !~ m/[1-3]/){
-		print "Choice: ";
-		$choice = <STDIN>; chomp $choice;
-	}
 	
-	my $incorrect_ID3_vars = 0;
+	print MYFILE "CREATE TABLE `music_database`.`music_list` (\n";
+	print MYFILE "`id` INT NOT NULL AUTO_INCREMENT PRIMARY KEY ,\n";
+	print MYFILE "`artist` VARCHAR( 255 ) NOT NULL ,\n";
+	print MYFILE "`album` VARCHAR( 255 ) NOT NULL ,\n";
+	print MYFILE "`title` VARCHAR( 255 ) NOT NULL ,\n";
+	print MYFILE "`track_number` VARCHAR( 255 ) NOT NULL ,\n";
+	print MYFILE "`bitrate` INT NOT NULL ,\n";
+	print MYFILE "`file_extension` VARCHAR( 10 ) NOT NULL,\n";
+	print MYFILE "`path` VARCHAR( 255 ) NOT NULL\n";
+	print MYFILE ") ENGINE = MYISAM ;\n";
 	
 	for my $filepath (keys %artists) {
 		my $artistDirectory = &sanitize($filepath);
-		make_path("$base/$artistDirectory");
+
 		for my $albumDirectoryPath (keys %{$artist_ref->{$filepath}} ) {
 			my $albumDirectory = &sanitize($albumDirectoryPath);
-			make_path("$base/$artistDirectory/$albumDirectory");
+
 			for my $song (keys %{$artist_ref->{$filepath}->{$albumDirectoryPath}} ) {
 				my $trackTitle = &sanitize($song);
 				my $sourceFileLocation = $artists{$filepath}{$albumDirectoryPath}{$song}{"path"};
-				my $file_typeetype = $artists{$filepath}{$albumDirectoryPath}{$song}{"filetype"};
+				my $file_extension = $artists{$filepath}{$albumDirectoryPath}{$song}{"filetype"};
 				my $trackckno = $artists{$filepath}{$albumDirectoryPath}{$song}{"track"};
 				my $new_file_bitrate = $artists{$filepath}{$albumDirectoryPath}{$song}{"bitrate"};
-				my $file_typeename;
+				my $filename;
+				my $filePath;
+				
 				if(defined($trackckno)) {
-					$file_typeename = $trackckno . " - " . $trackTitle . ".$file_typeetype";
+					$filename = $trackckno . " - " . $trackTitle . ".$file_extension";
 				}
 				else {
-					$file_typeename = $trackTitle. "." . lc($file_typeetype);
+					$filename = $trackTitle. "." . lc($file_extension);
+					$trackckno = "NULL";
 				}
-				my $musicfile = "$base/$artistDirectory/$albumDirectory/$file_typeename";
+				
+				$filePath = "$artistDirectory/$albumDirectory/$filename";
 				
 				
-				if(defined($artistDirectory) && $artistDirectory ne "" && defined($albumDirectory) && $albumDirectory ne "" && defined($file_typeename) && $file_typeename ne ""){
-					if(-e $musicfile) {
-						if($choice == 1) {
-							if($moveFile == 0) {
-								
-								#prints out exactly what is going on, --verbose
-								if($verbose){
-									print "Copying $sourceFileLocation --> $base/$artistDirectory/$albumDirectory/$file_typeename\n";
-								}		
-								copy($sourceFileLocation, "$base/$artistDirectory/$albumDirectory/$file_typeename") or warn "*ERROR could not copy file located at $sourceFileLocation\n";
-							}
-							else {
-							
-								#prints out exactly what is going on, --verbose
-								if($verbose){
-									print "Moving $sourceFileLocation --> $base/$artistDirectory/$albumDirectory/$file_typeename\n";
-								}
-								move($sourceFileLocation, "$base/$artistDirectory/$albumDirectory/$file_typeename") or warn "*ERROR could not move file located at $sourceFileLocation\n";
-							}
-						}
-						if($choice == 2){
-							my $tag = $exifTool->ImageInfo($musicfile, @keep) or warn "*Error getting ID3 tags from $musicfile\n";
-							my $AvgBitrate = &num($tag->{"AvgBitrate"});
-							my $AudioBitrate = &num($tag->{"AudioBitrate"});
-							my $bitrate;
+				if(!defined($new_file_bitrate) || $new_file_bitrate == 0) {
+					
+					$new_file_bitrate = "NULL";
+				}
 
-							if(defined($AvgBitrate)){
-								$bitrate = $AvgBitrate;
-							}
-							
-							if(defined($AudioBitrate)){
-								$bitrate = $AudioBitrate;
-							}
-							
-							if(defined($bitrate) && $new_file_bitrate){
-								if($new_file_bitrate > $bitrate){
-									
-									#prints out exactly what is going on, --verbose
-									if($verbose){
-										print color 'Bold Green';
-										print "New file bitrate of " . $new_file_bitrate . " is > than " . $bitrate . " Replacing\n";
-										print color 'reset';
-									}
-									
-									if($moveFile == 0) {
-									
-										#prints out exactly what is going on, --verbose
-										if($verbose){
-											print "Copying $sourceFileLocation --> $base/$artistDirectory/$albumDirectory/$file_typeename\n";
-										}
-										copy($sourceFileLocation, "$base/$artistDirectory/$albumDirectory/$file_typeename") or warn "*ERROR could not copy file located at $sourceFileLocation\n";
-									}
-									else {
-									
-										#prints out exactly what is going on, --verbose
-										if($verbose){
-											print "Moving $sourceFileLocation --> $base/$artistDirectory/$albumDirectory/$file_typeename\n";
-										}
-										move($sourceFileLocation, "$base/$artistDirectory/$albumDirectory/$file_typeename") or warn "*ERROR could not move file located at $sourceFileLocation\n";
-									}
-									
-								}
-								else {
-								
-									#prints out exactly what is going on, --verbose
-									if($verbose){
-										print "Old file is of higer or equal bitrate, Skipping.\n";
-									}
-								}
-							}
-							#bitrate was not defined, check files size, (used for FLAC files)
-							else{
-								my $filesize = -s $musicfile;
-								my $new_filesize = -s $sourceFileLocation;
-								if($new_filesize > $filesize){
-									
-									#prints out exactly what is going on, --verbose
-									if($verbose){
-										print "New file size of "  . $new_filesize . " is > than " . $filesize . " Replacing\n";
-									}
-									
-									if($moveFile == 0) {
-									
-										#prints out exactly what is going on, --verbose
-										if($verbose){
-											print "Copying $sourceFileLocation --> $base/$artistDirectory/$albumDirectory/$file_typeename\n";
-										}
-										copy($sourceFileLocation, "$base/$artistDirectory/$albumDirectory/$file_typeename") or warn "*ERROR could not copy file located at $sourceFileLocation\n";
-									}
-									
-									else {
-										
-										#prints out exactly what is going on, --verbose
-										if($verbose){
-											print "Moving $sourceFileLocation --> $base/$artistDirectory/$albumDirectory/$file_typeename\n";
-										}
-										move($sourceFileLocation, "$base/$artistDirectory/$albumDirectory/$file_typeename") or warn "*ERROR could not move file located at $sourceFileLocation\n";
-									}
-									
-								}
-								else {
-								
-									#prints out exactly what is going on, --verbose
-									if($verbose){
-										print "Old file is of higer or equal bitrate, Skipping.\n";
-									}
-									
-								}
-							}
-						}
-					}
-					else {
-						if($moveFile == 0) {
-						
-							#prints out exactly what is going on, --verbose
-							if($verbose){
-								print "Copying $sourceFileLocation --> $base/$artistDirectory/$albumDirectory/$file_typeename\n";
-							}
-							copy($sourceFileLocation, "$base/$artistDirectory/$albumDirectory/$file_typeename") or warn "*ERROR could not copy file located at $sourceFileLocation\n";
-						}
-						else {
-							
-							#prints out exactly what is going on, --verbose
-							if($verbose){
-								print "Moving $sourceFileLocation --> $base/$artistDirectory/$albumDirectory/$file_typeename\n";
-							}
-							move($sourceFileLocation, "$base/$artistDirectory/$albumDirectory/$file_typeename") or warn "*ERROR could not move file located at $sourceFileLocation\n";
-						}
-					}
+				if($verbose){
+					print "Adding $sourceFileLocation --> $SQL_file\n";
 				}
-				else{
-					#ID3 tages were messed up
-					$incorrect_ID3_vars++;
+				
+				if(defined($artistDirectory) && $artistDirectory ne "" && defined($albumDirectory) && $albumDirectory ne "" && defined($trackTitle) && $trackTitle ne ""){
+					print MYFILE "INSERT INTO `music_database`.`music_list` (
+							`artist` ,
+							`album` ,
+							`title`,
+							`track_number` ,
+							`bitrate` ,
+							`file_extension`,
+							`path`)
+							VALUES (\"". $artistDirectory .
+							"\", \"" . $albumDirectory .
+							"\", \"" . $trackTitle .
+							"\", \"" . $trackckno .
+							"\", \"" . $new_file_bitrate .
+							"\", \"" . $file_extension .
+							"\", \"" . $filePath .
+							"\");\n";
 				}
 			}
 		}
+		
 	}
 	
-	print "Number of files with an incorrect directory structure: " . $incorrect_ID3_vars;
+	close (MYFILE); 
 	print color 'Bold Green';
-	print "\nDone creating and populating directories!\n";
+	print "\nDone creating SQL Script!\n";
 	print color 'reset';
 	
 	&postbuild();
@@ -696,13 +560,14 @@ sub preremove {
 	&artistaction("r", $match, 1, $operator, $goal) unless $match eq "q";
 }
 sub prebuild {
-	print "Enter directory to move or copy files to, [q] to quit: ";
-	my $dir = <STDIN>; chomp($dir);
-	$dir =~ s/[\\|\/]$//;
-	&build($dir) unless $dir eq "q";
+
+	print "Enter the Name of the SQL script: ";
+	my $file = <STDIN>; chomp($file);
+	&build($file) unless $file eq "q";
 }
 
 sub postbuild {
+	#$makecopies = 0;
 	my $choice = "";
  	while($choice !~ m/[y|n]/) {
  		print "\n\nRun again? [y/n]> ";
